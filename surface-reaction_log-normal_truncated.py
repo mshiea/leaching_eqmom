@@ -261,7 +261,7 @@ if __name__ == "__main__":
         g = lambda x: x**i * f_scaled(x)
         moments_scaled.append(quad(g, 0, 1)[0])
 
-    nGaussQuadPoints = [4] * 3
+    nGaussQuadPoints = [10] * 3
 
     q_n, C_A, min_size, max_size, points, times, m_n = main(
         sys.argv[1:], C_A_0, nMoments, moments_scaled, m0_0, tau, minSize_0,
@@ -412,7 +412,7 @@ if __name__ == "__main__":
     markers = ['o', '^', 'x', '+', 's', 'v', '*']
     markersize = [4, 4, 5, 7, 4, 4, 5]
 
-    for k in range(nMoments):
+    for k in range(min(nMoments, len(colors))):
         ax.plot(params["t_eval"], error[k], linestyle=styles[k], marker=markers[k],
                 clip_on=False, color=colors[k], label=str(k), zorder=100)
 

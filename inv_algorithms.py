@@ -6,73 +6,7 @@ from exceptions import RealizabilityErr
 
 def adaptiveWheeler(m, n, upperRange, time=None):
 
-    nMoms = 2*n
-
-    sigma = np.zeros(n*(n + 1))
-
-    # Assigning the bottom row of the 2D sigma matrix
-    sigma[0:nMoms] = m
-
-    # Defining array for diagonal elements of the Jacobi matrix
-    a = np.zeros(n)
-
-    # Assigning the first element of array "a"
-    atmp = sigma[1]/sigma[0]
-    a[0] = atmp
-
-    # Assigning the second row of the sigma matrix
-    for i in range(nMoms - 2):
-        sigma[i + nMoms] = sigma[i + 2] - atmp*sigma[i + 1]
-
-    # Defining array for off-diagonal elements of the Jacobi matrix
-    b = np.zeros(n-1)
-
-    # Assigning the first element of the array "b"
-    btmp = sigma[nMoms] / sigma[0]
-    b[0] = btmp
-
-    # Defining zeta array for realizability check
-    zeta = np.zeros(nMoms - 1)
-
-    zeta[0] = atmp
-
-    zetatmp = btmp / atmp
-    zeta[1] = zetatmp
-
-    if zetatmp > 0:
-        # Assigning the second element of the array "a"
-        atmp = sigma[nMoms + 1] / sigma[nMoms] - atmp
-        a[1] = atmp
-
-        zeta[2] = atmp - zetatmp
-
-    # Loop over the next rows of the sigma matrix
-    for j in range(2, n):
-
-        if (zetatmp <= 0):
-            break
-
-        nCol = nMoms - 2*j
-
-        # Auxiliary indexes for mapping the sigma matrix from 2D to 1D
-        fb = nMoms*j + j*(1 - j)
-        fb_1 = fb - nCol - 2
-        fb_2 = fb_1 - nCol - 4
-
-        # Loop over the columns of each row and assign the elements
-        for i in range(nCol):
-            sigma[i + fb] = sigma[i + 2 + fb_1] - atmp * sigma[i + 1 + fb_1] \
-                - btmp * sigma[i + 2 + fb_2]
-
-        atmp = sigma[fb + 1]/sigma[fb] - sigma[fb_1 + 1]/sigma[fb_1]
-        btmp = sigma[fb] / sigma[fb_1]
-
-        a[j] = atmp
-        b[j-1] = btmp
-
-        zetatmp = btmp / zeta[2*j-2]
-        zeta[2*j-1] = zetatmp
-        zeta[2*j] = atmp - zeta[2*j-1]
+    a, b, zeta = zeta_chebyshev(m)
 
     # Reduce number of nodes (n) if the moments are unrealizable
     _, rN = nodeReduction(zeta, n, time)
@@ -244,6 +178,87 @@ def PD(m, n):
     return w, x
 
 
+def zeta_chebyshev(m):
+
+    nMoms = len(m)
+
+    n = int(nMoms / 2)
+
+    a = np.zeros(n)
+    a[0] = m[1]/m[0]
+
+    b = np.zeros(n)
+
+    zeta = np.zeros(nMoms)
+    zeta[1] = a[0]
+
+    sigma = np.zeros((nMoms, nMoms))
+
+    sigma[0, :] = m
+
+    for l in range(1, nMoms - 1):
+        sigma[1, l] = sigma[0, l+1] - a[0]*sigma[0, l]
+
+    for k in range(1, n):
+        b[k] = sigma[k, k] / sigma[k-1, k-1]
+        a[k] = sigma[k, k+1] / sigma[k, k] - sigma[k-1, k] / sigma[k-1, k-1]
+
+        zeta[2*k] = b[k] / zeta[2*k - 1]
+        zeta[2*k + 1] = a[k] - zeta[2*k]
+
+        for l in range(k+1, nMoms - k - 1):
+            sigma[k+1, l] = sigma[k, l+1] - a[k]*sigma[k, l] - b[k]*sigma[k-1, l]
+
+    if (nMoms % 2) > 0:
+        b = np.append(b, sigma[n, n] / sigma[n-1, n-1])
+        zeta[-1] = b[n] / zeta[2*n - 1]
+
+    # print(a, b, zeta)
+
+    return a, b[1:], zeta[1:]
+
+
+def interior_moment_space_stieltjes(m):
+
+    _, _, zeta = zeta_chebyshev(m)
+
+    N_mN = 0
+    for z in zeta:
+        if z > 1e-12:
+            N_mN += 1
+        else:
+            break
+
+    if N_mN < len(m) - 1:
+        return False, N_mN
+    else:
+        return True, N_mN
+
+
+def interior_moment_space_hausdorff(m):
+
+    _, _, zeta = zeta_chebyshev(m)
+
+    canonical_moments = np.zeros(zeta.size)
+
+    canonical_moments[0] = m[1] / m[0]
+
+    for k in range (1, canonical_moments.size):
+        canonical_moments[k] = zeta[k] / (1 - canonical_moments[k-1])
+
+    N_mN = 0
+    for p in canonical_moments:
+        if p >= 1.0 or p < 1e-12:
+            break
+        else:
+            N_mN += 1
+
+    if N_mN < len(m) - 1:
+        return False, N_mN
+    else:
+        return True, N_mN
+
+
 def nodeReduction(zeta, n, time):
 
     isRealizable = True
@@ -268,13 +283,31 @@ def nodeReduction(zeta, n, time):
 
 if __name__ == "__main__":
 
-    moments = [
-        9.99238373e-01, 2.54655116e-01, 5.09798624e-02, 8.02664426e-03,
-        2.08366672e-03, 1.48807044e-03, 1.03783002e-03, 6.49399777e-04]
+    nNodes = 3
 
-    nNodes = 4
-    upperRange = 1.0001
+    x = [0.2, 0.7, 0.99]
+    w = [1.5, 2.5, 1.1]
+
+    nMoms = 7
+
+    moments = np.zeros(nMoms)
+    for k in range(nMoms):
+        moment = 0
+        for j in range(len(x)):
+            if k > 0:
+                moment += w[j]*(x[j]**k)
+            else:
+                moment += w[j]
+        moments[k] = moment
+
+    # moments[nMoms - 1] *= 1.0001
+
+    upperRange = 10.0001
 
     weights, abscissas, rNNodes = adaptiveWheeler(moments, nNodes, upperRange)
 
     print(weights, abscissas, rNNodes)
+
+    print(interior_moment_space_stieltjes(moments))
+
+    print(interior_moment_space_hausdorff(moments))

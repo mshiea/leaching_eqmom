@@ -4,6 +4,8 @@ from sympy import Poly, exp
 from sympy.abc import sigma, xi
 from sympy.matrices import zeros
 from inv_algorithms import adaptiveWheeler
+from inv_algorithms import interior_moment_space_stieltjes
+from inv_algorithms import interior_moment_space_hausdorff
 # from scipy.optimize import ridder
 from scipy.special import beta
 from scipy.optimize import brentq, brent
@@ -39,36 +41,58 @@ class EQMOM(object):
         if self.kernel == 'beta':
             self.lowerRange = 0.0
             self.upperRange = 1.0001
+            self.is_interior = lambda m: interior_moment_space_hausdorff(m)
         elif self.kernel == 'gamma':
             self.lowerRange = 0.0
             self.upperRange = np.inf
+            self.is_interior = lambda m: interior_moment_space_stieltjes(m)
 
     def moment_inversion(self, moments):
 
-        self.moments = moments
+        _, N_mN = self.is_interior(moments)
 
-        if self.nMoments > 3:
-            kernel_param_max = min(
-                moments[2]/moments[1] - moments[1]/moments[0],
-                moments[3]/moments[2] - moments[2]/moments[1])
+        if (N_mN % 2) > 0:
+            self.nMoments = N_mN + 1
+            self.nNodes = int(nMoments/ 2)
+
+            self.moments = moments[0:nMoments]
+
+            weights, abscissas, _ = adaptiveWheeler(
+                moments, self.nNodes, self.upperRange)
+
+            kernel_param = 0.0
+
         else:
-            kernel_param_max = moments[2]/moments[1] - moments[1]/moments[0]
+            self.nMoments = N_mN + 1
+            self.nNodes = int(N_mN / 2)
 
-        try:
-            kernel_param = brentq(self.func, 0, 100*kernel_param_max, maxiter=50)
+            self.A, self.A_inv = transform_matrix(
+                self.nMoments, kernel=self.kernel)
 
-        except:
-            print("Warning: root finding failed!")
-            kernel_param = brent(
-                self.func_abs, brack=(0, 100*kernel_param_max), maxiter=50)
+            self.moments = moments[0:self.nMoments]
 
-        A_inv = np.array(
-            self.A_inv.subs(sigma, kernel_param)).astype(np.float64)
+            if self.nMoments > 3:
+                kernel_param_max = min(
+                    moments[2]/moments[1] - moments[1]/moments[0],
+                    moments[3]/moments[2] - moments[2]/moments[1])
+            else:
+                kernel_param_max = moments[2]/moments[1] - moments[1]/moments[0]
 
-        degenerated_moments = np.dot(A_inv[:-1, :-1], self.moments[:-1])
+            try:
+                kernel_param = brentq(
+                    self.func, 0, 100*kernel_param_max, maxiter=50)
+            except:
+                print("Warning: root finding failed!")
+                kernel_param = brent(
+                    self.func_min, brack=(0, 100*kernel_param_max), maxiter=50)
 
-        weights, abscissas, rNNodes = adaptiveWheeler(
-            degenerated_moments, self.nNodes, self.upperRange)
+            A_inv = np.array(
+                self.A_inv.subs(sigma, kernel_param)).astype(np.float64)
+
+            degenerated_moments = np.dot(A_inv[:-1, :-1], self.moments[:-1])
+
+            weights, abscissas, _ = adaptiveWheeler(
+                degenerated_moments, self.nNodes, self.upperRange)
 
         return weights, abscissas, kernel_param
 
@@ -94,8 +118,31 @@ class EQMOM(object):
 
         return self.moments[order_2N] - moment_2N
 
-    def func_abs(self, kernel_param):
-        return abs(self.func(kernel_param))
+    def func_min(self, kernel_param):
+
+        A_inv = np.array(
+            self.A_inv.subs(sigma, kernel_param)).astype(np.float64)
+
+        degenerated_moments = np.dot(A_inv[:-1, :-1], self.moments[:-1])
+
+        is_interior, _ = self.is_interior(degenerated_moments)
+        if is_interior:
+            return 1e6
+
+        weights, abscissas, rNNodes = adaptiveWheeler(
+            degenerated_moments, self.nNodes, self.upperRange)
+
+        order_2N = 2*rNNodes
+        degenerated_moment_2N = 0
+        for i in range(rNNodes):
+            degenerated_moment_2N += weights[i] * abscissas[i]**order_2N
+
+        moment_2N = float(np.dot(
+            self.A[order_2N, :order_2N + 1].subs(sigma, kernel_param),
+            np.append(degenerated_moments[:order_2N],
+                      degenerated_moment_2N))[0])
+
+        return abs(self.moments[order_2N] - moment_2N)
 
     def evaluate_quadrature(self, moments, points):
 
